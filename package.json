@@ -1,0 +1,68 @@
+
+{
+  "name": "idealplots-backend",
+  "version": "1.0.0",
+  "description": "Backend API for IdealPlots Real Estate Platform",
+  "license": "ISC",
+  "author": "Arjun K",
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "dev:docker": "NODE_ENV=development npm run dev",
+    "production": "NODE_ENV=production node index.js",
+    "migrate": "node scripts/migrate.js",
+    "seed": "node scripts/seed.js",
+    "backup": "node scripts/backup.js",
+    "deploy": "bash scripts/deploy.sh",
+    "test": "echo \"Tests will be added later\" && exit 0",
+    "lint": "eslint .",
+    "docker:setup": "bash docker-scripts.sh setup",
+    "docker:start": "bash docker-scripts.sh start",
+    "docker:stop": "bash docker-scripts.sh stop",
+    "docker:backup": "bash docker-scripts.sh backup"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "compression": "^1.7.4",
+    "express-rate-limit": "^7.1.5",
+    "morgan": "^1.10.0",
+    "dotenv": "^16.5.0",
+    "mysql2": "^3.14.1",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "express-validator": "^7.0.1",
+    "multer": "^1.4.5-lts.1",
+    "sharp": "^0.33.2",
+    "nodemailer": "^6.9.8",
+    "uuid": "^9.0.1",
+    "winston": "^3.11.0",
+    "winston-daily-rotate-file": "^4.7.1",
+    "moment": "^2.30.1",
+    "lodash": "^4.17.21"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.5"
+  },
+  "keywords": [
+    "real-estate",
+    "property",
+    "nodejs",
+    "express",
+    "mysql",
+    "api"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arjsr33/idealplots-backend.git"
+  }
+}
