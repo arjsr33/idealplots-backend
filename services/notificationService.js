@@ -226,6 +226,143 @@ const emailTemplates = {
         <p>If you didn't request this reset, please ignore this email and your password will remain unchanged.</p>
       </div>
     `
+  }),
+    agentEnquiryAssignment: (data) => ({
+    subject: `New Enquiry Assigned - ${data.ticketNumber || 'Ticket'} | ${process.env.COMPANY_NAME || 'Real Estate Platform'}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f8f9fa;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #2c3e50; margin: 0;">${process.env.COMPANY_NAME || 'Real Estate Platform'}</h1>
+          <p style="color: #7f8c8d; margin: 5px 0;">Professional Real Estate Services</p>
+        </div>
+        
+        <div style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 30px; border-radius: 10px; text-align: center; margin-bottom: 30px;">
+          <h2 style="margin: 0 0 10px 0;">🎯 New Enquiry Assigned</h2>
+          <p style="margin: 0; opacity: 0.9; font-size: 18px;">You have a new client enquiry!</p>
+        </div>
+        
+        <div style="background: white; padding: 25px; border-radius: 8px; margin: 20px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+          <h3 style="color: #495057; margin-top: 0; border-bottom: 2px solid #dee2e6; padding-bottom: 10px;">📋 Enquiry Details</h3>
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+              <td style="padding: 12px 0; font-weight: bold; color: #495057; width: 35%;">Agent Name:</td>
+              <td style="padding: 12px 0; color: #212529;">${data.agentName}</td>
+            </tr>
+            <tr>
+              <td style="padding: 12px 0; font-weight: bold; color: #495057;">Ticket Number:</td>
+              <td style="padding: 12px 0; color: #212529; font-family: monospace; background: #e9ecef; padding: 8px; border-radius: 4px;">${data.ticketNumber || 'N/A'}</td>
+            </tr>
+            <tr>
+              <td style="padding: 12px 0; font-weight: bold; color: #495057;">Client Requirements:</td>
+              <td style="padding: 12px 0; color: #212529; line-height: 1.6;">${data.requirements}</td>
+            </tr>
+            <tr>
+              <td style="padding: 12px 0; font-weight: bold; color: #495057;">Priority:</td>
+              <td style="padding: 12px 0;">
+                <span style="background: #ffc107; color: #212529; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold;">
+                  HIGH PRIORITY
+                </span>
+              </td>
+            </tr>
+          </table>
+        </div>
+        
+        <div style="background: #e8f4fd; border-left: 4px solid #007bff; padding: 20px; margin: 20px 0;">
+          <h4 style="color: #0c5460; margin-top: 0; display: flex; align-items: center;">
+            <span style="margin-right: 8px;">💡</span>
+            Quick Action Required
+          </h4>
+          <p style="color: #0c5460; margin: 10px 0; line-height: 1.6;">
+            This enquiry has been automatically assigned to you based on your expertise and availability. 
+            Please respond within 2 hours for the best client experience.
+          </p>
+        </div>
+        
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${data.dashboardUrl || `${process.env.FRONTEND_URL}/agent/dashboard`}" 
+             style="background: linear-gradient(135deg, #007bff 0%, #0056b3 100%); color: white; padding: 15px 30px; text-decoration: none; border-radius: 25px; display: inline-block; font-weight: bold; box-shadow: 0 4px 15px rgba(0, 123, 255, 0.3); margin-right: 10px;">
+            📱 View in Dashboard
+          </a>
+          <a href="tel:${data.clientPhone || ''}" 
+             style="background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%); color: white; padding: 15px 30px; text-decoration: none; border-radius: 25px; display: inline-block; font-weight: bold; box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);">
+            📞 Call Client
+          </a>
+        </div>
+        
+        <hr style="border: none; border-top: 1px solid #dee2e6; margin: 30px 0;">
+        
+        <div style="text-align: center; color: #6c757d; font-size: 14px;">
+          <p>🏆 <strong>Pro Tip:</strong> Quick response times lead to higher conversion rates!</p>
+          <p>Need help? Contact support at ${process.env.SUPPORT_EMAIL || 'support@example.com'}</p>
+          <p style="margin-top: 20px;">
+            <strong>${process.env.COMPANY_NAME || 'Real Estate Platform'}</strong><br>
+            Your success is our priority
+          </p>
+        </div>
+      </div>
+    `
+  }),
+
+  // Property status change notification
+  propertyStatusUpdate: (data) => ({
+    subject: `Property ${data.status === 'approved' ? 'Approved' : 'Update'} - ${data.propertyTitle}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #2c3e50;">${process.env.COMPANY_NAME || 'Real Estate Platform'}</h1>
+        </div>
+        
+        <div style="background: ${data.status === 'approved' ? '#d4edda' : data.status === 'rejected' ? '#f8d7da' : '#fff3cd'}; 
+                    border: 1px solid ${data.status === 'approved' ? '#c3e6cb' : data.status === 'rejected' ? '#f5c6cb' : '#ffeaa7'}; 
+                    padding: 20px; border-radius: 8px; margin: 20px 0;">
+          <h3 style="color: ${data.status === 'approved' ? '#155724' : data.status === 'rejected' ? '#721c24' : '#856404'}; margin-top: 0;">
+            Property Status Update
+          </h3>
+          <p><strong>Property:</strong> ${data.propertyTitle}</p>
+          <p><strong>New Status:</strong> ${data.status.toUpperCase()}</p>
+          ${data.notes ? `<p><strong>Admin Notes:</strong> ${data.notes}</p>` : ''}
+        </div>
+        
+        ${data.status === 'approved' ? `
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${process.env.FRONTEND_URL}/properties/${data.propertySlug}" 
+               style="background: #28a745; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
+              View Live Property
+            </a>
+          </div>
+        ` : ''}
+      </div>
+    `
+  }),
+
+  // Welcome email for new users
+  userWelcome: (data) => ({
+    subject: `Welcome to ${process.env.COMPANY_NAME || 'Real Estate Platform'}!`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #2c3e50;">Welcome ${data.name}!</h1>
+          <p style="color: #7f8c8d;">Thank you for joining ${process.env.COMPANY_NAME || 'our platform'}</p>
+        </div>
+        
+        <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+          <h3>What's Next?</h3>
+          <ul style="line-height: 1.8;">
+            <li>Complete your profile to get better property recommendations</li>
+            <li>Set your property preferences and budget</li>
+            <li>Start browsing properties in your preferred locations</li>
+            <li>Save properties to your favorites for easy access</li>
+          </ul>
+        </div>
+        
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${process.env.FRONTEND_URL}/properties" 
+             style="background: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
+            Browse Properties
+          </a>
+        </div>
+      </div>
+    `
   })
 };
 
@@ -259,6 +396,29 @@ Client: ${data.clientName}
 Property: ${data.propertyTitle}
 Contact: ${data.clientPhone}
 Login to view details: ${process.env.FRONTEND_URL}/agent/dashboard
+  `.trim(),
+
+  propertyStatusUpdate: (data) => `
+Property Update: Your property "${data.propertyTitle}" has been ${data.status}.
+${data.status === 'approved' ? 'Congratulations! Your property is now live.' : ''}
+${data.notes ? `Note: ${data.notes}` : ''}
+View details: ${process.env.FRONTEND_URL}/my-properties
+  `.trim(),
+
+  enquiryResponse: (data) => `
+Update on your enquiry ${data.ticketNumber}:
+Status: ${data.status}
+${data.agentName ? `Agent: ${data.agentName}` : ''}
+${data.notes ? `Message: ${data.notes}` : ''}
+Track: ${process.env.FRONTEND_URL}/track/${data.ticketNumber}
+  `.trim(),
+
+  propertyAlert: (data) => `
+New property alert! 
+${data.propertyTitle} - ₹${data.price}
+Location: ${data.location}
+${data.bedrooms ? `${data.bedrooms}BHK` : ''} ${data.area}sq.ft
+View: ${process.env.FRONTEND_URL}/properties/${data.slug}
   `.trim()
 };
 
@@ -344,6 +504,293 @@ const sendSMS = async (smsData) => {
     throw new ExternalServiceError(`SMS sending failed: ${error.message}`);
   }
 };
+
+/**
+ * Send property status update notification
+ * @param {Object} data - Property and status data
+ * @returns {Promise<Object>} Send result
+ */
+const sendPropertyStatusNotification = async (data) => {
+  try {
+    const {
+      ownerEmail,
+      ownerPhone,
+      ownerName,
+      propertyTitle,
+      status,
+      notes,
+      propertySlug
+    } = data;
+
+    const results = {
+      email: { sent: false, error: null },
+      sms: { sent: false, error: null }
+    };
+
+    // Send email notification
+    try {
+      const emailTemplate = additionalEmailTemplates.propertyStatusUpdate({
+        ownerName,
+        propertyTitle,
+        status,
+        notes,
+        propertySlug
+      });
+
+      await sendEmail({
+        to: ownerEmail,
+        subject: emailTemplate.subject,
+        html: emailTemplate.html
+      });
+      results.email.sent = true;
+    } catch (error) {
+      results.email.error = error.message;
+    }
+
+    // Send SMS notification
+    try {
+      const smsBody = additionalSmsTemplates.propertyStatusUpdate({
+        propertyTitle,
+        status,
+        notes
+      });
+
+      await sendSMS({
+        to: ownerPhone,
+        body: smsBody
+      });
+      results.sms.sent = true;
+    } catch (error) {
+      results.sms.error = error.message;
+    }
+
+    return results;
+
+  } catch (error) {
+    console.error('Error sending property status notification:', error);
+    throw error;
+  }
+};
+
+/**
+ * Send enquiry response notification to client
+ * @param {Object} data - Enquiry response data
+ * @returns {Promise<Object>} Send result
+ */
+const sendEnquiryResponseNotification = async (data) => {
+  try {
+    const {
+      clientEmail,
+      clientPhone,
+      clientName,
+      ticketNumber,
+      status,
+      agentName,
+      notes
+    } = data;
+
+    const results = {
+      email: { sent: false, error: null },
+      sms: { sent: false, error: null }
+    };
+
+    // Send email notification
+    try {
+      await sendEmail({
+        to: clientEmail,
+        subject: `Update on Your Enquiry ${ticketNumber}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2 style="color: #2c3e50;">Enquiry Update</h2>
+            
+            <p>Dear ${clientName},</p>
+            
+            <p>We have an update on your enquiry <strong>${ticketNumber}</strong>:</p>
+            
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+              <p><strong>Status:</strong> ${status}</p>
+              ${agentName ? `<p><strong>Assigned Agent:</strong> ${agentName}</p>` : ''}
+              ${notes ? `<p><strong>Message:</strong> ${notes}</p>` : ''}
+            </div>
+            
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${process.env.FRONTEND_URL}/track/${ticketNumber}" 
+                 style="background: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
+                Track Your Enquiry
+              </a>
+            </div>
+          </div>
+        `
+      });
+      results.email.sent = true;
+    } catch (error) {
+      results.email.error = error.message;
+    }
+
+    // Send SMS notification
+    try {
+      const smsBody = additionalSmsTemplates.enquiryResponse({
+        ticketNumber,
+        status,
+        agentName,
+        notes
+      });
+
+      await sendSMS({
+        to: clientPhone,
+        body: smsBody
+      });
+      results.sms.sent = true;
+    } catch (error) {
+      results.sms.error = error.message;
+    }
+
+    return results;
+
+  } catch (error) {
+    console.error('Error sending enquiry response notification:', error);
+    throw error;
+  }
+};
+
+/**
+ * Send welcome notification to new users
+ * @param {Object} userData - User data
+ * @returns {Promise<Object>} Send result
+ */
+const sendWelcomeNotification = async (userData) => {
+  try {
+    const { name, email, phone } = userData;
+
+    const results = {
+      email: { sent: false, error: null },
+      sms: { sent: false, error: null }
+    };
+
+    // Send welcome email
+    try {
+      const emailTemplate = additionalEmailTemplates.userWelcome({ name });
+
+      await sendEmail({
+        to: email,
+        subject: emailTemplate.subject,
+        html: emailTemplate.html
+      });
+      results.email.sent = true;
+    } catch (error) {
+      results.email.error = error.message;
+    }
+
+    // Send welcome SMS
+    try {
+      await sendSMS({
+        to: phone,
+        body: `Welcome to ${process.env.COMPANY_NAME || 'Real Estate Platform'}, ${name}! Start exploring properties at ${process.env.FRONTEND_URL}`
+      });
+      results.sms.sent = true;
+    } catch (error) {
+      results.sms.error = error.message;
+    }
+
+    return results;
+
+  } catch (error) {
+    console.error('Error sending welcome notification:', error);
+    throw error;
+  }
+};
+
+/**
+ * Send property alert to interested users
+ * @param {Array} users - List of users to notify
+ * @param {Object} propertyData - Property data
+ * @returns {Promise<Object>} Send results
+ */
+const sendPropertyAlert = async (users, propertyData) => {
+  try {
+    const {
+      propertyTitle,
+      price,
+      location,
+      bedrooms,
+      area,
+      slug
+    } = propertyData;
+
+    const results = {
+      totalUsers: users.length,
+      emailsSent: 0,
+      smsSent: 0,
+      errors: []
+    };
+
+    for (const user of users) {
+      try {
+        // Send email alert
+        await sendEmail({
+          to: user.email,
+          subject: `New Property Alert - ${propertyTitle}`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <h2 style="color: #2c3e50;">New Property Alert</h2>
+              
+              <p>Hi ${user.name},</p>
+              
+              <p>A new property matching your preferences is now available:</p>
+              
+              <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <h3>${propertyTitle}</h3>
+                <p><strong>Price:</strong> ₹${price.toLocaleString()}</p>
+                <p><strong>Location:</strong> ${location}</p>
+                ${bedrooms ? `<p><strong>Bedrooms:</strong> ${bedrooms}</p>` : ''}
+                <p><strong>Area:</strong> ${area} sq.ft</p>
+              </div>
+              
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${process.env.FRONTEND_URL}/properties/${slug}" 
+                   style="background: #28a745; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
+                  View Property
+                </a>
+              </div>
+            </div>
+          `
+        });
+        results.emailsSent++;
+
+        // Send SMS alert if user has phone
+        if (user.phone) {
+          const smsBody = additionalSmsTemplates.propertyAlert({
+            propertyTitle,
+            price,
+            location,
+            bedrooms,
+            area,
+            slug
+          });
+
+          await sendSMS({
+            to: user.phone,
+            body: smsBody
+          });
+          results.smsSent++;
+        }
+
+      } catch (error) {
+        results.errors.push({
+          user: user.email,
+          error: error.message
+        });
+      }
+    }
+
+    return results;
+
+  } catch (error) {
+    console.error('Error sending property alerts:', error);
+    throw error;
+  }
+};
+
 
 // ================================================================
 // AGENT NOTIFICATION FUNCTIONS
@@ -871,7 +1318,15 @@ module.exports = {
   // Bulk notifications
   sendBulkNotifications,
   
+  // Additional functions
+  sendPropertyStatusNotification,
+  sendEnquiryResponseNotification,
+  sendWelcomeNotification,
+  sendPropertyAlert,
+
   // Templates
   emailTemplates,
-  smsTemplates
+  smsTemplates,
+  additionalEmailTemplates,
+  additionalSmsTemplates
 };

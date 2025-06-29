@@ -1,6 +1,6 @@
 // ================================================================
-// BACKEND/ROUTES/AUTH.JS - AUTHENTICATION & REGISTRATION ROUTES
-// User registration with role selection, email/phone verification, password reset
+// BACKEND/ROUTES/AUTH.JS - FIXED AUTHENTICATION ROUTES
+// Fixed to match the actual database schema from paste.txt
 // ================================================================
 
 const express = require('express');
@@ -242,17 +242,17 @@ router.post('/register',
       const phoneCode = generateVerificationCode(6);
 
       // Determine initial status based on user type
-      const initialStatus = user_type === 'agent' ? 'pending_approval' : 'pending_verification';
+      const initialStatus = user_type === 'agent' ? 'pending_verification' : 'pending_verification';
 
-      // Create user account
+      // Create user account (FIXED: Using correct schema fields)
       const [userResult] = await connection.execute(`
         INSERT INTO users (
           name, email, phone, password, user_type, status,
           email_verification_token, phone_verification_code,
           license_number, agency_name, experience_years, 
           commission_rate, specialization, agent_bio,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+          is_buyer, is_seller
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         name, email, phone, hashedPassword, user_type, initialStatus,
         emailToken, phoneCode,
@@ -261,25 +261,41 @@ router.post('/register',
         experience_years || null,
         commission_rate || null,
         specialization || null,
-        agent_bio || null
+        agent_bio || null,
+        user_type === 'user' ? true : false, // is_buyer
+        user_type === 'user' ? false : false // is_seller
       ]);
 
       const userId = userResult.insertId;
 
-      // If agent registration, create pending approval record
+      // If agent registration, create pending approval record (FIXED: Using correct schema)
       if (user_type === 'agent') {
         await connection.execute(`
           INSERT INTO pending_approvals (
-            user_id, approval_type, submitted_at, status
-          ) VALUES (?, 'agent_registration', NOW(), 'pending')
-        `, [userId]);
+            approval_type, record_id, table_name, submitted_by, 
+            submission_data, priority
+          ) VALUES (?, ?, ?, ?, ?, ?)
+        `, [
+          'agent_application', 
+          userId, 
+          'users', 
+          userId,
+          JSON.stringify({
+            agent_name: name,
+            license_number: license_number,
+            agency_name: agency_name,
+            experience_years: experience_years
+          }),
+          'normal'
+        ]);
       }
 
       // Get created user details (excluding password)
       const [newUser] = await connection.execute(`
         SELECT 
-          id, name, email, phone, user_type, status, created_at,
-          license_number, agency_name, experience_years, commission_rate
+          id, uuid, name, email, phone, user_type, status, created_at,
+          license_number, agency_name, experience_years, commission_rate,
+          is_buyer, is_seller
         FROM users WHERE id = ?
       `, [userId]);
 
@@ -295,14 +311,16 @@ router.post('/register',
       try {
         await notificationService.sendEmail({
           to: email,
-          subject: `Welcome to ${process.env.COMPANY_NAME || 'Real Estate Platform'} - Verify Your Email`,
+          subject: `Welcome to ${process.env.COMPANY_NAME || 'Ideal Plots'} - Verify Your Email`,
           html: notificationService.emailTemplates.emailVerification({
             name,
-            token: emailToken
+            token: emailToken,
+            verificationUrl: `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`
           }).html
         });
         notificationResults.email.sent = true;
       } catch (error) {
+        console.error('Email sending failed:', error);
         notificationResults.email.error = error.message;
       }
 
@@ -314,6 +332,7 @@ router.post('/register',
         });
         notificationResults.sms.sent = true;
       } catch (error) {
+        console.error('SMS sending failed:', error);
         notificationResults.sms.error = error.message;
       }
 
@@ -362,12 +381,13 @@ router.post('/login',
 
     const { email, password } = req.body;
 
-    // Get user with password for verification
+    // Get user with password for verification (FIXED: Using correct field names)
     const [users] = await executeQuery(`
       SELECT 
-        id, name, email, phone, password, user_type, status,
-        email_verified_at, phone_verified_at, token_version,
-        last_login_at, failed_login_attempts, locked_until
+        id, uuid, name, email, phone, password, user_type, status,
+        email_verified_at, phone_verified_at, 
+        last_login_at, login_attempts, locked_until,
+        is_buyer, is_seller, profile_image
       FROM users 
       WHERE email = ?
     `, [email]);
@@ -378,13 +398,13 @@ router.post('/login',
 
     const user = users[0];
 
-    // Check if account is locked
+    // Check if account is locked (FIXED: Using correct field name)
     if (user.locked_until && new Date(user.locked_until) > new Date()) {
       throw new AuthenticationError(`Account locked until ${user.locked_until}`);
     }
 
     // Check if account is active
-    if (['suspended', 'deleted'].includes(user.status)) {
+    if (['suspended', 'inactive'].includes(user.status)) {
       throw new AuthenticationError('Account suspended or deactivated');
     }
 
@@ -392,23 +412,23 @@ router.post('/login',
     const isPasswordValid = await comparePassword(password, user.password);
     
     if (!isPasswordValid) {
-      // Increment failed login attempts
-      const failedAttempts = (user.failed_login_attempts || 0) + 1;
+      // Increment failed login attempts (FIXED: Using correct field name)
+      const failedAttempts = (user.login_attempts || 0) + 1;
       const lockUntil = failedAttempts >= 5 ? new Date(Date.now() + 30 * 60 * 1000) : null; // 30 min lock
 
       await executeQuery(`
         UPDATE users 
-        SET failed_login_attempts = ?, locked_until = ?
+        SET login_attempts = ?, locked_until = ?
         WHERE id = ?
       `, [failedAttempts, lockUntil, user.id]);
 
       throw new AuthenticationError('Invalid email or password');
     }
 
-    // Reset failed login attempts on successful login
+    // Reset failed login attempts on successful login (FIXED: Using correct field name)
     await executeQuery(`
       UPDATE users 
-      SET failed_login_attempts = 0, locked_until = NULL, last_login_at = NOW()
+      SET login_attempts = 0, locked_until = NULL, last_login_at = NOW()
       WHERE id = ?
     `, [user.id]);
 
@@ -551,13 +571,26 @@ router.post('/resend-email-verification',
     `, [newToken, user.id]);
 
     // Send verification email
-    const result = await notificationService.sendVerificationEmail(user.id);
+    try {
+      await notificationService.sendEmail({
+        to: email,
+        subject: 'Verify Your Email - Ideal Plots',
+        html: notificationService.emailTemplates.emailVerification({
+          name: user.name,
+          token: newToken,
+          verificationUrl: `${process.env.FRONTEND_URL}/verify-email?token=${newToken}`
+        }).html
+      });
 
-    res.json({
-      success: true,
-      message: 'Verification email sent successfully',
-      data: result
-    });
+      res.json({
+        success: true,
+        message: 'Verification email sent successfully',
+        data: { email }
+      });
+    } catch (error) {
+      console.error('Failed to send verification email:', error);
+      throw new Error('Failed to send verification email');
+    }
   })
 );
 
@@ -642,13 +675,21 @@ router.post('/resend-phone-verification',
     `, [newCode, user.id]);
 
     // Send verification SMS
-    const result = await notificationService.sendVerificationSMS(user.id);
+    try {
+      await notificationService.sendSMS({
+        to: phone,
+        body: notificationService.smsTemplates.phoneVerification({ code: newCode })
+      });
 
-    res.json({
-      success: true,
-      message: 'Verification SMS sent successfully',
-      data: result
-    });
+      res.json({
+        success: true,
+        message: 'Verification SMS sent successfully',
+        data: { phone }
+      });
+    } catch (error) {
+      console.error('Failed to send verification SMS:', error);
+      throw new Error('Failed to send verification SMS');
+    }
   })
 );
 
@@ -672,7 +713,7 @@ router.post('/forgot-password',
     const { email } = req.body;
 
     const [users] = await executeQuery(`
-      SELECT id, name, email FROM users WHERE email = ? AND status != 'deleted'
+      SELECT id, name, email FROM users WHERE email = ? AND status != 'inactive'
     `, [email]);
 
     // Always return success to prevent email enumeration
@@ -687,10 +728,10 @@ router.post('/forgot-password',
     const resetToken = generateVerificationToken();
     const resetExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-    // Store reset token
+    // Store reset token (FIXED: Using correct field name)
     await executeQuery(`
       UPDATE users 
-      SET password_reset_token = ?, password_reset_expires = ?, updated_at = NOW()
+      SET password_reset_token = ?, password_reset_expires_at = ?, updated_at = NOW()
       WHERE id = ?
     `, [resetToken, resetExpiry, user.id]);
 
@@ -698,10 +739,11 @@ router.post('/forgot-password',
     try {
       await notificationService.sendEmail({
         to: email,
-        subject: 'Password Reset Request',
+        subject: 'Password Reset Request - Ideal Plots',
         html: notificationService.emailTemplates.passwordReset({
           name: user.name,
-          token: resetToken
+          token: resetToken,
+          resetUrl: `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`
         }).html
       });
     } catch (error) {
@@ -731,10 +773,11 @@ router.post('/reset-password',
 
     const { token, password } = req.body;
 
+    // FIXED: Using correct field name
     const [users] = await executeQuery(`
-      SELECT id, name, email, password_reset_token, password_reset_expires
+      SELECT id, name, email, password_reset_token, password_reset_expires_at
       FROM users 
-      WHERE password_reset_token = ? AND password_reset_expires > NOW()
+      WHERE password_reset_token = ? AND password_reset_expires_at > NOW()
     `, [token]);
 
     if (users.length === 0) {
@@ -744,11 +787,11 @@ router.post('/reset-password',
     const user = users[0];
     const hashedPassword = await hashPassword(password);
 
-    // Update password and clear reset token
+    // Update password and clear reset token (FIXED: Using correct field names)
     await executeQuery(`
       UPDATE users 
-      SET password = ?, password_reset_token = NULL, password_reset_expires = NULL,
-          failed_login_attempts = 0, locked_until = NULL, updated_at = NOW()
+      SET password = ?, password_reset_token = NULL, password_reset_expires_at = NULL,
+          login_attempts = 0, locked_until = NULL, updated_at = NOW()
       WHERE id = ?
     `, [hashedPassword, user.id]);
 
@@ -774,10 +817,11 @@ router.get('/me',
 
     const [users] = await executeQuery(`
       SELECT 
-        id, name, email, phone, user_type, status, created_at,
+        id, uuid, name, email, phone, user_type, status, created_at,
         email_verified_at, phone_verified_at, last_login_at,
         license_number, agency_name, experience_years, commission_rate,
-        specialization, agent_bio, preferred_agent_id
+        specialization, agent_bio, preferred_agent_id, profile_image,
+        is_buyer, is_seller
       FROM users 
       WHERE id = ?
     `, [userId]);
@@ -819,6 +863,33 @@ router.post('/check-email',
       data: {
         available: users.length === 0,
         email
+      }
+    });
+  })
+);
+
+/**
+ * Check Phone Availability
+ * POST /api/auth/check-phone
+ */
+router.post('/check-phone',
+  asyncHandler(async (req, res) => {
+    const { phone } = req.body;
+
+    if (!phone) {
+      throw new ValidationError('Phone number required');
+    }
+
+    const [users] = await executeQuery(
+      'SELECT id FROM users WHERE phone = ?',
+      [phone]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        available: users.length === 0,
+        phone
       }
     });
   })
