@@ -5,7 +5,7 @@
   "description": "Backend API for IdealPlots Real Estate Platform",
   "license": "ISC",
   "author": "Arjun K",
-  "type": "module",
+  "type": "commonjs",
   "main": "index.js",
   "engines": {
     "node": ">=18.0.0",
@@ -23,7 +23,7 @@
     "test": "echo \"Tests will be added later\" && exit 0",
     "lint": "eslint .",
     "docker:setup": "bash docker-scripts.sh setup",
-    "docker:start": "bash docker-scripts.sh start",
+    "docker:start": "bash docker-scripts.sh start", 
     "docker:stop": "bash docker-scripts.sh stop",
     "docker:backup": "bash docker-scripts.sh backup"
   },

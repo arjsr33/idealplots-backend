@@ -409,6 +409,74 @@ router.get('/agent/:enquiryId',
     const enquiry = await enquiryService.getEnquiryDetails(enquiryId, true);
 
     // Verify agent is assigned to this enquiry
+    if (enquiry.assigned_to !== agentId) {
+      throw new AuthorizationError('Access denied - enquiry not assigned to you');
+    }
+
+    res.json({
+      success: true,
+      data: { enquiry }
+    });
+  })
+);
+
+/**
+ * Update enquiry (agent)
+ * PUT /api/enquiries/agent/:enquiryId
+ */
+router.put('/agent/:enquiryId',
+  updateLimiter,
+  authenticateToken,
+  requireAgent,
+  [param('enquiryId').isInt({ min: 1 }).withMessage('Valid enquiry ID required')],
+  updateEnquiryValidation,
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      throw new ValidationError('Validation failed', errors.array());
+    }
+
+    const { enquiryId } = req.params;
+    const agentId = req.user.id;
+    const updates = req.body;
+
+    // Verify agent is assigned to this enquiry
+    const enquiry = await enquiryService.getEnquiryDetails(enquiryId, false);
+    if (enquiry.assigned_to !== agentId) {
+      throw new AuthorizationError('Access denied - enquiry not assigned to you');
+    }
+
+    const updatedEnquiry = await enquiryService.updateEnquiry(enquiryId, updates, agentId);
+
+    res.json({
+      success: true,
+      message: 'Enquiry updated successfully',
+      data: { enquiry: updatedEnquiry }
+    });
+  })
+);
+
+/**
+ * Add note to enquiry (agent)
+ * POST /api/enquiries/agent/:enquiryId/notes
+ */
+router.post('/agent/:enquiryId/notes',
+  updateLimiter,
+  authenticateToken,
+  requireAgent,
+  [param('enquiryId').isInt({ min: 1 }).withMessage('Valid enquiry ID required')],
+  addNoteValidation,
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      throw new ValidationError('Validation failed', errors.array());
+    }
+
+    const { enquiryId } = req.params;
+    const agentId = req.user.id;
+    const { note, note_type = 'internal', communication_method, next_follow_up_date } = req.body;
+
+    // Verify agent is assigned to this enquiry
     const enquiry = await enquiryService.getEnquiryDetails(enquiryId, false);
     if (enquiry.assigned_to !== agentId) {
       throw new AuthorizationError('Access denied - enquiry not assigned to you');
@@ -927,71 +995,3 @@ router.get('/admin/export',
 // ================================================================
 
 module.exports = router;
-    if (enquiry.assigned_to !== agentId) {
-      throw new AuthorizationError('Access denied - enquiry not assigned to you');
-    }
-
-    res.json({
-      success: true,
-      data: { enquiry }
-    });
-  })
-);
-
-/**
- * Update enquiry (agent)
- * PUT /api/enquiries/agent/:enquiryId
- */
-router.put('/agent/:enquiryId',
-  updateLimiter,
-  authenticateToken,
-  requireAgent,
-  [param('enquiryId').isInt({ min: 1 }).withMessage('Valid enquiry ID required')],
-  updateEnquiryValidation,
-  asyncHandler(async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      throw new ValidationError('Validation failed', errors.array());
-    }
-
-    const { enquiryId } = req.params;
-    const agentId = req.user.id;
-    const updates = req.body;
-
-    // Verify agent is assigned to this enquiry
-    const enquiry = await enquiryService.getEnquiryDetails(enquiryId, false);
-    if (enquiry.assigned_to !== agentId) {
-      throw new AuthorizationError('Access denied - enquiry not assigned to you');
-    }
-
-    const updatedEnquiry = await enquiryService.updateEnquiry(enquiryId, updates, agentId);
-
-    res.json({
-      success: true,
-      message: 'Enquiry updated successfully',
-      data: { enquiry: updatedEnquiry }
-    });
-  })
-);
-
-/**
- * Add note to enquiry (agent)
- * POST /api/enquiries/agent/:enquiryId/notes
- */
-router.post('/agent/:enquiryId/notes',
-  updateLimiter,
-  authenticateToken,
-  requireAgent,
-  [param('enquiryId').isInt({ min: 1 }).withMessage('Valid enquiry ID required')],
-  addNoteValidation,
-  asyncHandler(async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      throw new ValidationError('Validation failed', errors.array());
-    }
-
-    const { enquiryId } = req.params;
-    const agentId = req.user.id;
-    const { note, note_type = 'internal', communication_method, next_follow_up_date } = req.body;
-
-    // Verify agent is assigned to this enquiry

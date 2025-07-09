@@ -1,22 +1,24 @@
 // ================================================================
-// BACKEND/ROUTES/AUTH.JS - FIXED AUTHENTICATION ROUTES
-// Fixed to match the actual database schema from paste.txt
+// BACKEND/ROUTES/AUTH.JS - FIXED WITH PROPER NOTIFICATION SERVICE INTEGRATION
+// Complete replacement with proper audit middleware and SMS service usage
 // ================================================================
 
 const express = require('express');
-const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
 
-// Import middleware and services
+// Import enhanced middleware and services
 const { 
   authenticateToken, 
   optionalAuth,
   hashPassword, 
   comparePassword,
   generateTokenPair,
+  refreshAccessToken,
+  incrementTokenVersion,
   generateVerificationToken,
-  generateVerificationCode,
-  refreshAccessToken
+  authRateLimiter,
+  emailVerificationRateLimiter,
+  passwordResetRateLimiter
 } = require('../middleware/auth');
 
 const { 
@@ -27,36 +29,13 @@ const {
   DuplicateError 
 } = require('../middleware/errorHandler');
 
-const { executeQuery, executeTransaction, handleDatabaseError } = require('../database/connection');
+// IMPORT AUDIT MIDDLEWARE
+const { auditMiddleware, audit } = require('../middleware/audit');
+
+const { executeQuery, executeTransaction } = require('../database/connection');
 const notificationService = require('../services/notificationService');
 
 const router = express.Router();
-
-// ================================================================
-// RATE LIMITING
-// ================================================================
-
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // 10 attempts per window
-  message: {
-    success: false,
-    error: 'Too many authentication attempts, please try again later.',
-    retryAfter: '15 minutes'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const verificationLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 3, // 3 verification attempts per window
-  message: {
-    success: false,
-    error: 'Too many verification attempts, please try again later.',
-    retryAfter: '5 minutes'
-  }
-});
 
 // ================================================================
 // VALIDATION RULES
@@ -74,8 +53,8 @@ const registerValidation = [
     .withMessage('Valid email address required'),
   
   body('phone')
-    .matches(/^\+?[1-9]\d{1,14}$/)
-    .withMessage('Valid phone number required (E.164 format)'),
+    .matches(/^\+?91[6-9]\d{9}$/)
+    .withMessage('Valid Indian phone number required (+91xxxxxxxxxx format)'),
   
   body('password')
     .isLength({ min: 8, max: 128 })
@@ -99,7 +78,8 @@ const registerValidation = [
     .if(body('user_type').equals('agent'))
     .isLength({ min: 5, max: 100 })
     .trim()
-    .withMessage('License number required for agents (5-100 characters)'),
+    .matches(/^[A-Z0-9\/\-]+$/)
+    .withMessage('License number required for agents (5-100 characters, alphanumeric with / and -)'),
   
   body('agency_name')
     .if(body('user_type').equals('agent'))
@@ -171,7 +151,7 @@ const passwordResetConfirmValidation = [
 ];
 
 // ================================================================
-// REGISTRATION ROUTES
+// REGISTRATION ROUTES WITH AUDIT MIDDLEWARE
 // ================================================================
 
 /**
@@ -179,8 +159,9 @@ const passwordResetConfirmValidation = [
  * POST /api/auth/register
  */
 router.post('/register',
-  authLimiter,
+  authRateLimiter,
   registerValidation,
+  audit.register,
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -237,38 +218,32 @@ router.post('/register',
       // Hash password
       const hashedPassword = await hashPassword(password);
       
-      // Generate verification tokens
-      const emailToken = generateVerificationToken();
-      const phoneCode = generateVerificationCode(6);
-
       // Determine initial status based on user type
       const initialStatus = user_type === 'agent' ? 'pending_verification' : 'pending_verification';
 
-      // Create user account (FIXED: Using correct schema fields)
+      // Create user account
       const [userResult] = await connection.execute(`
         INSERT INTO users (
           name, email, phone, password, user_type, status,
-          email_verification_token, phone_verification_code,
           license_number, agency_name, experience_years, 
           commission_rate, specialization, agent_bio,
           is_buyer, is_seller
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         name, email, phone, hashedPassword, user_type, initialStatus,
-        emailToken, phoneCode,
         license_number || null,
         agency_name || null,
         experience_years || null,
         commission_rate || null,
         specialization || null,
         agent_bio || null,
-        user_type === 'user' ? true : false, // is_buyer
-        user_type === 'user' ? false : false // is_seller
+        true,  // All users can buy properties
+        true   // All users can sell properties
       ]);
 
       const userId = userResult.insertId;
 
-      // If agent registration, create pending approval record (FIXED: Using correct schema)
+      // If agent registration, create pending approval record
       if (user_type === 'agent') {
         await connection.execute(`
           INSERT INTO pending_approvals (
@@ -301,48 +276,49 @@ router.post('/register',
 
       const user = newUser[0];
 
-      // Send verification notifications
-      const notificationResults = {
+      // FIXED: Use proper notification service functions
+      let notificationResults = {
         email: { sent: false, error: null },
         sms: { sent: false, error: null }
       };
 
-      // Send email verification
       try {
-        await notificationService.sendEmail({
-          to: email,
-          subject: `Welcome to ${process.env.COMPANY_NAME || 'Ideal Plots'} - Verify Your Email`,
-          html: notificationService.emailTemplates.emailVerification({
-            name,
-            token: emailToken,
-            verificationUrl: `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`
-          }).html
-        });
-        notificationResults.email.sent = true;
+        // Use the dedicated verification email function
+        const emailResult = await notificationService.sendVerificationEmail(userId);
+        notificationResults.email = {
+          sent: emailResult.success,
+          error: emailResult.success ? null : emailResult.error
+        };
       } catch (error) {
-        console.error('Email sending failed:', error);
+        console.error('Email verification sending failed:', error);
         notificationResults.email.error = error.message;
       }
 
-      // Send SMS verification
       try {
-        await notificationService.sendSMS({
-          to: phone,
-          body: notificationService.smsTemplates.phoneVerification({ code: phoneCode })
-        });
-        notificationResults.sms.sent = true;
+        // Use the dedicated verification SMS function
+        const smsResult = await notificationService.sendVerificationSMS(userId);
+        notificationResults.sms = {
+          sent: smsResult.success,
+          error: smsResult.success ? null : smsResult.error
+        };
       } catch (error) {
-        console.error('SMS sending failed:', error);
+        console.error('SMS verification sending failed:', error);
         notificationResults.sms.error = error.message;
+      }
+
+      // If it's a regular user (not agent), also send welcome notification
+      if (user_type === 'user') {
+        try {
+          await notificationService.sendWelcomeNotification({ name, email, phone });
+        } catch (error) {
+          console.error('Welcome notification failed:', error);
+          // Don't fail registration for welcome notification failure
+        }
       }
 
       return {
         user,
-        notifications: notificationResults,
-        tokens: {
-          emailToken,
-          phoneCode
-        }
+        notifications: notificationResults
       };
     });
 
@@ -363,7 +339,7 @@ router.post('/register',
 );
 
 // ================================================================
-// LOGIN ROUTES
+// LOGIN ROUTES WITH AUDIT MIDDLEWARE
 // ================================================================
 
 /**
@@ -371,8 +347,9 @@ router.post('/register',
  * POST /api/auth/login
  */
 router.post('/login',
-  authLimiter,
+  authRateLimiter,
   loginValidation,
+  audit.login,
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -381,7 +358,7 @@ router.post('/login',
 
     const { email, password } = req.body;
 
-    // Get user with password for verification (FIXED: Using correct field names)
+    // Get user with password for verification
     const [users] = await executeQuery(`
       SELECT 
         id, uuid, name, email, phone, password, user_type, status,
@@ -398,7 +375,7 @@ router.post('/login',
 
     const user = users[0];
 
-    // Check if account is locked (FIXED: Using correct field name)
+    // Check if account is locked
     if (user.locked_until && new Date(user.locked_until) > new Date()) {
       throw new AuthenticationError(`Account locked until ${user.locked_until}`);
     }
@@ -412,7 +389,7 @@ router.post('/login',
     const isPasswordValid = await comparePassword(password, user.password);
     
     if (!isPasswordValid) {
-      // Increment failed login attempts (FIXED: Using correct field name)
+      // Increment failed login attempts
       const failedAttempts = (user.login_attempts || 0) + 1;
       const lockUntil = failedAttempts >= 5 ? new Date(Date.now() + 30 * 60 * 1000) : null; // 30 min lock
 
@@ -425,7 +402,7 @@ router.post('/login',
       throw new AuthenticationError('Invalid email or password');
     }
 
-    // Reset failed login attempts on successful login (FIXED: Using correct field name)
+    // Reset failed login attempts on successful login
     await executeQuery(`
       UPDATE users 
       SET login_attempts = 0, locked_until = NULL, last_login_at = NOW()
@@ -456,7 +433,8 @@ router.post('/login',
  * POST /api/auth/refresh
  */
 router.post('/refresh',
-  authLimiter,
+  authRateLimiter,
+  auditMiddleware('token_refresh'),
   asyncHandler(async (req, res) => {
     const { refreshToken } = req.body;
 
@@ -475,14 +453,16 @@ router.post('/refresh',
 );
 
 /**
- * Logout
+ * Logout with Token Invalidation
  * POST /api/auth/logout
  */
 router.post('/logout',
   authenticateToken,
+  audit.logout,
   asyncHandler(async (req, res) => {
-    // In a production app, you might want to blacklist the token
-    // For now, we'll just return success
+    // Invalidate refresh token by incrementing token version
+    await incrementTokenVersion(req.user.id);
+    
     res.json({
       success: true,
       message: 'Logged out successfully'
@@ -491,7 +471,7 @@ router.post('/logout',
 );
 
 // ================================================================
-// EMAIL VERIFICATION ROUTES
+// EMAIL VERIFICATION ROUTES WITH AUDIT MIDDLEWARE
 // ================================================================
 
 /**
@@ -499,7 +479,8 @@ router.post('/logout',
  * POST /api/auth/verify-email
  */
 router.post('/verify-email',
-  verificationLimiter,
+  emailVerificationRateLimiter,
+  auditMiddleware('email_verification'),
   asyncHandler(async (req, res) => {
     const { token } = req.body;
 
@@ -542,7 +523,8 @@ router.post('/verify-email',
  * POST /api/auth/resend-email-verification
  */
 router.post('/resend-email-verification',
-  verificationLimiter,
+  emailVerificationRateLimiter,
+  auditMiddleware('email_verification_resend'),
   asyncHandler(async (req, res) => {
     const { email } = req.body;
 
@@ -561,32 +543,20 @@ router.post('/resend-email-verification',
     }
 
     const user = users[0];
-    const newToken = generateVerificationToken();
 
-    // Update user with new token
-    await executeQuery(`
-      UPDATE users 
-      SET email_verification_token = ?, updated_at = NOW()
-      WHERE id = ?
-    `, [newToken, user.id]);
-
-    // Send verification email
     try {
-      await notificationService.sendEmail({
-        to: email,
-        subject: 'Verify Your Email - Ideal Plots',
-        html: notificationService.emailTemplates.emailVerification({
-          name: user.name,
-          token: newToken,
-          verificationUrl: `${process.env.FRONTEND_URL}/verify-email?token=${newToken}`
-        }).html
-      });
-
-      res.json({
-        success: true,
-        message: 'Verification email sent successfully',
-        data: { email }
-      });
+      // FIXED: Use proper notification service function
+      const result = await notificationService.sendVerificationEmail(user.id);
+      
+      if (result.success) {
+        res.json({
+          success: true,
+          message: 'Verification email sent successfully',
+          data: { email: result.email }
+        });
+      } else {
+        throw new Error(result.error || 'Failed to send verification email');
+      }
     } catch (error) {
       console.error('Failed to send verification email:', error);
       throw new Error('Failed to send verification email');
@@ -595,7 +565,7 @@ router.post('/resend-email-verification',
 );
 
 // ================================================================
-// PHONE VERIFICATION ROUTES
+// PHONE VERIFICATION ROUTES WITH AUDIT MIDDLEWARE
 // ================================================================
 
 /**
@@ -603,7 +573,8 @@ router.post('/resend-email-verification',
  * POST /api/auth/verify-phone
  */
 router.post('/verify-phone',
-  verificationLimiter,
+  emailVerificationRateLimiter,
+  auditMiddleware('phone_verification'),
   asyncHandler(async (req, res) => {
     const { phone, code } = req.body;
 
@@ -646,7 +617,8 @@ router.post('/verify-phone',
  * POST /api/auth/resend-phone-verification
  */
 router.post('/resend-phone-verification',
-  verificationLimiter,
+  emailVerificationRateLimiter,
+  auditMiddleware('phone_verification_resend'),
   asyncHandler(async (req, res) => {
     const { phone } = req.body;
 
@@ -665,27 +637,20 @@ router.post('/resend-phone-verification',
     }
 
     const user = users[0];
-    const newCode = generateVerificationCode(6);
 
-    // Update user with new code
-    await executeQuery(`
-      UPDATE users 
-      SET phone_verification_code = ?, updated_at = NOW()
-      WHERE id = ?
-    `, [newCode, user.id]);
-
-    // Send verification SMS
     try {
-      await notificationService.sendSMS({
-        to: phone,
-        body: notificationService.smsTemplates.phoneVerification({ code: newCode })
-      });
-
-      res.json({
-        success: true,
-        message: 'Verification SMS sent successfully',
-        data: { phone }
-      });
+      // FIXED: Use proper notification service function
+      const result = await notificationService.sendVerificationSMS(user.id);
+      
+      if (result.success) {
+        res.json({
+          success: true,
+          message: 'Verification SMS sent successfully',
+          data: { phone: result.phone }
+        });
+      } else {
+        throw new Error(result.error || 'Failed to send verification SMS');
+      }
     } catch (error) {
       console.error('Failed to send verification SMS:', error);
       throw new Error('Failed to send verification SMS');
@@ -694,7 +659,7 @@ router.post('/resend-phone-verification',
 );
 
 // ================================================================
-// PASSWORD RESET ROUTES
+// PASSWORD RESET ROUTES WITH AUDIT MIDDLEWARE
 // ================================================================
 
 /**
@@ -702,8 +667,9 @@ router.post('/resend-phone-verification',
  * POST /api/auth/forgot-password
  */
 router.post('/forgot-password',
-  authLimiter,
+  passwordResetRateLimiter,
   passwordResetValidation,
+  auditMiddleware('password_reset_request'),
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -713,7 +679,7 @@ router.post('/forgot-password',
     const { email } = req.body;
 
     const [users] = await executeQuery(`
-      SELECT id, name, email FROM users WHERE email = ? AND status != 'inactive'
+      SELECT id, name, email, phone FROM users WHERE email = ? AND status != 'inactive'
     `, [email]);
 
     // Always return success to prevent email enumeration
@@ -725,29 +691,20 @@ router.post('/forgot-password',
     }
 
     const user = users[0];
-    const resetToken = generateVerificationToken();
-    const resetExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-    // Store reset token (FIXED: Using correct field name)
-    await executeQuery(`
-      UPDATE users 
-      SET password_reset_token = ?, password_reset_expires_at = ?, updated_at = NOW()
-      WHERE id = ?
-    `, [resetToken, resetExpiry, user.id]);
-
-    // Send reset email
     try {
-      await notificationService.sendEmail({
-        to: email,
-        subject: 'Password Reset Request - Ideal Plots',
-        html: notificationService.emailTemplates.passwordReset({
-          name: user.name,
-          token: resetToken,
-          resetUrl: `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`
-        }).html
-      });
+      // Use the new notification service method
+      const result = await notificationService.sendPasswordResetNotification(user.id);
+      
+      if (!result.email.sent) {
+        console.error('Password reset email failed:', result.email.error);
+      }
+      
+      if (user.phone && !result.sms.sent) {
+        console.error('Password reset SMS failed:', result.sms.error);
+      }
     } catch (error) {
-      console.error('Failed to send password reset email:', error);
+      console.error('Password reset notification failed:', error);
       // Don't throw error to prevent revealing email existence
     }
 
@@ -763,8 +720,9 @@ router.post('/forgot-password',
  * POST /api/auth/reset-password
  */
 router.post('/reset-password',
-  authLimiter,
+  passwordResetRateLimiter,
   passwordResetConfirmValidation,
+  auditMiddleware('password_reset_complete'),
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -773,7 +731,6 @@ router.post('/reset-password',
 
     const { token, password } = req.body;
 
-    // FIXED: Using correct field name
     const [users] = await executeQuery(`
       SELECT id, name, email, password_reset_token, password_reset_expires_at
       FROM users 
@@ -787,23 +744,43 @@ router.post('/reset-password',
     const user = users[0];
     const hashedPassword = await hashPassword(password);
 
-    // Update password and clear reset token (FIXED: Using correct field names)
     await executeQuery(`
       UPDATE users 
-      SET password = ?, password_reset_token = NULL, password_reset_expires_at = NULL,
-          login_attempts = 0, locked_until = NULL, updated_at = NOW()
+      SET password = ?, 
+          password_reset_token = NULL, 
+          password_reset_expires_at = NULL,
+          login_attempts = 0, 
+          locked_until = NULL, 
+          updated_at = NOW(),
+          token_version = token_version + 1  // Invalidate all existing sessions
       WHERE id = ?
     `, [hashedPassword, user.id]);
 
+    // Optionally send confirmation notification
+    try {
+      await notificationService.sendEmail({
+        to: user.email,
+        subject: 'Password Changed Successfully',
+        html: `Your password has been successfully updated.`
+      });
+    } catch (error) {
+      console.error('Failed to send password change confirmation:', error);
+      // Not critical enough to fail the request
+    }
+
     res.json({
       success: true,
-      message: 'Password reset successfully'
+      message: 'Password reset successfully',
+      data: {
+        email: user.email,
+        updated_at: new Date().toISOString()
+      }
     });
   })
 );
 
 // ================================================================
-// ACCOUNT STATUS ROUTES
+// ACCOUNT STATUS ROUTES WITH AUDIT MIDDLEWARE
 // ================================================================
 
 /**
@@ -812,6 +789,7 @@ router.post('/reset-password',
  */
 router.get('/me',
   authenticateToken,
+  audit.viewProfile,
   asyncHandler(async (req, res) => {
     const userId = req.user.id;
 
@@ -846,6 +824,7 @@ router.get('/me',
  * POST /api/auth/check-email
  */
 router.post('/check-email',
+  // No audit needed for availability checks
   asyncHandler(async (req, res) => {
     const { email } = req.body;
 
@@ -873,6 +852,7 @@ router.post('/check-email',
  * POST /api/auth/check-phone
  */
 router.post('/check-phone',
+  // No audit needed for availability checks
   asyncHandler(async (req, res) => {
     const { phone } = req.body;
 
@@ -896,7 +876,179 @@ router.post('/check-phone',
 );
 
 // ================================================================
-// EXPORT ROUTER
+// USER PREFERENCES ROUTES WITH AUDIT MIDDLEWARE
 // ================================================================
+
+/**
+ * Update User Buyer/Seller Preferences
+ * PUT /api/auth/preferences
+ */
+router.put('/preferences',
+  authenticateToken,
+  body('preferences').isObject().withMessage('Preferences must be an object'),
+  audit.updateProfile,
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      throw new ValidationError('Validation failed', errors.array());
+    }
+
+    const userId = req.user.id;
+    const { preferences } = req.body;
+    
+    // Build dynamic update query based on provided preferences
+    const allowedFields = [
+      'preferred_property_types', 'budget_min', 'budget_max', 
+      'preferred_cities', 'preferred_bedrooms'
+    ];
+    
+    const updateFields = [];
+    const updateValues = [];
+    
+    allowedFields.forEach(field => {
+      if (preferences[field] !== undefined) {
+        updateFields.push(`${field} = ?`);
+        updateValues.push(preferences[field]);
+      }
+    });
+    
+    if (updateFields.length === 0) {
+      throw new ValidationError('No valid preferences provided');
+    }
+    
+    updateFields.push('updated_at = NOW()');
+    updateValues.push(userId);
+    
+    await executeQuery(`
+      UPDATE users 
+      SET ${updateFields.join(', ')}
+      WHERE id = ?
+    `, updateValues);
+
+    res.json({
+      success: true,
+      message: 'Preferences updated successfully',
+      data: { preferences }
+    });
+  })
+);
+
+/**
+ * Get User Dashboard Summary
+ * GET /api/auth/dashboard
+ */
+router.get('/dashboard',
+  authenticateToken,
+  audit.viewDashboard,
+  asyncHandler(async (req, res) => {
+    const userId = req.user.id;
+
+    // Get dashboard data using the view from schema
+    const [dashboardData] = await executeQuery(`
+      SELECT * FROM user_dashboard_view WHERE id = ?
+    `, [userId]);
+
+    if (dashboardData.length === 0) {
+      throw new NotFoundError('User dashboard data not found');
+    }
+
+    const dashboard = dashboardData[0];
+
+    // Get recent activity
+    const [recentProperties] = await executeQuery(`
+      SELECT id, title, property_type, price, status, created_at
+      FROM property_listings 
+      WHERE owner_id = ? 
+      ORDER BY created_at DESC 
+      LIMIT 5
+    `, [userId]);
+
+    const [recentFavorites] = await executeQuery(`
+      SELECT pl.id, pl.title, pl.price, pl.city, uf.created_at as favorited_at
+      FROM user_favorites uf
+      JOIN property_listings pl ON uf.property_id = pl.id
+      WHERE uf.user_id = ?
+      ORDER BY uf.created_at DESC
+      LIMIT 5
+    `, [userId]);
+
+    res.json({
+      success: true,
+      data: {
+        summary: dashboard,
+        recent_properties: recentProperties,
+        recent_favorites: recentFavorites
+      }
+    });
+  })
+);
+
+// ================================================================
+// ADMIN ONLY ROUTES WITH AUDIT MIDDLEWARE
+// ================================================================
+
+/**
+ * Check notification service health
+ * GET /api/auth/notification-health
+ */
+router.get('/notification-health',
+  authenticateToken,
+  auditMiddleware('admin_system_check'),
+  asyncHandler(async (req, res) => {
+    // Only allow admins to check service health
+    if (req.user.user_type !== 'admin') {
+      throw new AuthenticationError('Admin access required');
+    }
+
+    const health = notificationService.getServiceHealth();
+
+    res.json({
+      success: true,
+      data: health
+    });
+  })
+);
+
+/**
+ * Get user's recent security events (for security-conscious users)
+ * GET /api/auth/security-events
+ */
+router.get('/security-events',
+  authenticateToken,
+  auditMiddleware('view_security_events'),
+  asyncHandler(async (req, res) => {
+    const userId = req.user.id;
+    const { days = 30 } = req.query;
+
+    // Get user's security events from audit logs
+    const [securityEvents] = await executeQuery(`
+      SELECT 
+        action,
+        ip_address,
+        user_agent,
+        created_at,
+        CASE 
+          WHEN action LIKE '%login%' THEN 'Authentication'
+          WHEN action LIKE '%password%' THEN 'Password'
+          WHEN action LIKE '%verification%' THEN 'Verification'
+          ELSE 'Other'
+        END as event_category
+      FROM audit_logs
+      WHERE user_id = ?
+      AND created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+      ORDER BY created_at DESC
+      LIMIT 50
+    `, [userId, days]);
+
+    res.json({
+      success: true,
+      data: {
+        events: securityEvents,
+        total: securityEvents.length,
+        period_days: days
+      }
+    });
+  })
+);
 
 module.exports = router;

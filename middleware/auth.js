@@ -1,11 +1,12 @@
 // ================================================================
-// BACKEND/MIDDLEWARE/AUTH.JS - COMPLETE AUTHENTICATION MIDDLEWARE
-// Matches the actual database schema with all required functionality
+// BACKEND/MIDDLEWARE/AUTH.JS - ENHANCED AUTHENTICATION MIDDLEWARE
+// Complete implementation with security improvements and production hardening
 // ================================================================
 
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
 const { executeQuery, handleDatabaseError } = require('../database/connection');
 const { 
   AuthenticationError, 
@@ -15,16 +16,85 @@ const {
 } = require('./errorHandler');
 
 // ================================================================
-// JWT CONFIGURATION
+// CONSTANTS
+// ================================================================
+
+const CONSTANTS = {
+  BCRYPT_ROUNDS: 12,
+  TOKEN_BYTES: 32,
+  DEFAULT_PASSWORD_LENGTH: 12,
+  MAX_LOGIN_ATTEMPTS: 5,
+  ACCOUNT_LOCK_DURATION: 30 * 60 * 1000, // 30 minutes
+  RATE_LIMIT: {
+    WINDOW_MS: 15 * 60 * 1000, // 15 minutes
+    MAX_REQUESTS: 100,
+    AUTH_MAX: 5,
+    VERIFICATION_MAX: 3,
+    PASSWORD_RESET_MAX: 3
+  }
+};
+
+// ================================================================
+// JWT CONFIGURATION WITH PRODUCTION SECURITY
 // ================================================================
 
 const JWT_CONFIG = {
-  secret: process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production',
-  refreshSecret: process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key',
+  secret: (() => {
+    if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+      throw new Error('JWT_SECRET must be set in production environment');
+    }
+    return process.env.JWT_SECRET || 'dev-secret-key-change-in-production';
+  })(),
+  
+  refreshSecret: (() => {
+    if (process.env.NODE_ENV === 'production' && !process.env.JWT_REFRESH_SECRET) {
+      throw new Error('JWT_REFRESH_SECRET must be set in production environment');
+    }
+    return process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-key';
+  })(),
+  
   accessTokenExpiry: process.env.JWT_ACCESS_EXPIRY || '15m',
   refreshTokenExpiry: process.env.JWT_REFRESH_EXPIRY || '7d',
   issuer: process.env.JWT_ISSUER || 'ideal-plots',
   audience: process.env.JWT_AUDIENCE || 'ideal-plots-users'
+};
+
+// ================================================================
+// DATABASE UTILITIES
+// ================================================================
+
+/**
+ * Get user by ID with specified fields
+ * @param {number} userId - User ID
+ * @param {string} fields - SQL field selection
+ * @returns {Promise<Object|null>} User object or null
+ */
+const getUserById = async (userId, fields = '*') => {
+  try {
+    const [users] = await executeQuery(
+      `SELECT ${fields} FROM users WHERE id = ? AND status IN ('active', 'pending_verification')`,
+      [userId]
+    );
+    return users[0] || null;
+  } catch (error) {
+    throw new Error(`Failed to fetch user: ${error.message}`);
+  }
+};
+
+/**
+ * Update user token version (for token revocation)
+ * @param {number} userId - User ID
+ * @returns {Promise<void>}
+ */
+const incrementTokenVersion = async (userId) => {
+  try {
+    await executeQuery(
+      'UPDATE users SET token_version = COALESCE(token_version, 0) + 1, updated_at = NOW() WHERE id = ?',
+      [userId]
+    );
+  } catch (error) {
+    throw new Error(`Failed to increment token version: ${error.message}`);
+  }
 };
 
 // ================================================================
@@ -38,7 +108,7 @@ const JWT_CONFIG = {
  */
 const hashPassword = async (password) => {
   try {
-    const saltRounds = parseInt(process.env.BCRYPT_ROUNDS) || 12;
+    const saltRounds = parseInt(process.env.BCRYPT_ROUNDS) || CONSTANTS.BCRYPT_ROUNDS;
     return await bcrypt.hash(password, saltRounds);
   } catch (error) {
     throw new Error(`Password hashing failed: ${error.message}`);
@@ -64,7 +134,7 @@ const comparePassword = async (password, hash) => {
  * @param {number} length - Password length
  * @returns {string} Generated password
  */
-const generateSecurePassword = (length = 12) => {
+const generateSecurePassword = (length = CONSTANTS.DEFAULT_PASSWORD_LENGTH) => {
   const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
   let password = '';
   
@@ -149,24 +219,49 @@ const generateRefreshToken = (payload) => {
 };
 
 /**
- * Generate token pair (access + refresh)
+ * Generate token pair (access + refresh) with expiry timestamps
  * @param {Object} user - User object
- * @returns {Object} Token pair
+ * @returns {Object} Token pair with metadata
  */
 const generateTokenPair = (user) => {
   try {
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
     
+    // Calculate actual expiry timestamps
+    const now = Date.now();
+    const accessTokenExpiryMs = parseExpiry(JWT_CONFIG.accessTokenExpiry);
+    const refreshTokenExpiryMs = parseExpiry(JWT_CONFIG.refreshTokenExpiry);
+    
     return {
       accessToken,
       refreshToken,
       accessTokenExpiry: JWT_CONFIG.accessTokenExpiry,
       refreshTokenExpiry: JWT_CONFIG.refreshTokenExpiry,
+      accessTokenExpiresAt: new Date(now + accessTokenExpiryMs).toISOString(),
+      refreshTokenExpiresAt: new Date(now + refreshTokenExpiryMs).toISOString(),
       tokenType: 'Bearer'
     };
   } catch (error) {
     throw new Error(`Token pair generation failed: ${error.message}`);
+  }
+};
+
+/**
+ * Parse JWT expiry string to milliseconds
+ * @param {string} expiry - Expiry string (e.g., '15m', '7d')
+ * @returns {number} Expiry in milliseconds
+ */
+const parseExpiry = (expiry) => {
+  const unit = expiry.slice(-1);
+  const value = parseInt(expiry.slice(0, -1));
+  
+  switch (unit) {
+    case 's': return value * 1000;
+    case 'm': return value * 60 * 1000;
+    case 'h': return value * 60 * 60 * 1000;
+    case 'd': return value * 24 * 60 * 60 * 1000;
+    default: return 15 * 60 * 1000; // Default to 15 minutes
   }
 };
 
@@ -215,7 +310,7 @@ const verifyRefreshToken = (token) => {
  * @returns {string} Verification token
  */
 const generateVerificationToken = () => {
-  return crypto.randomBytes(32).toString('hex');
+  return crypto.randomBytes(CONSTANTS.TOKEN_BYTES).toString('hex');
 };
 
 /**
@@ -230,11 +325,11 @@ const generateVerificationCode = (length = 6) => {
 };
 
 // ================================================================
-// TOKEN REFRESH FUNCTION
+// TOKEN REFRESH FUNCTION WITH ROTATION
 // ================================================================
 
 /**
- * Refresh access token using refresh token
+ * Refresh access token using refresh token with token rotation
  * @param {string} refreshToken - Refresh token
  * @returns {Promise<Object>} New token pair
  */
@@ -242,40 +337,113 @@ const refreshAccessToken = async (refreshToken) => {
   try {
     const decoded = verifyRefreshToken(refreshToken);
     
-    // Get fresh user data from database
-    const [users] = await executeQuery(`
-      SELECT id, uuid, name, email, user_type, status, 
-             email_verified_at, phone_verified_at, 
-             is_buyer, is_seller, token_version
-      FROM users 
-      WHERE id = ? AND status IN ('active', 'pending_verification')
-    `, [decoded.id]);
+    // Invalidate old refresh token by incrementing token version
+    await incrementTokenVersion(decoded.id);
     
-    if (users.length === 0) {
+    // Get fresh user data with new token_version
+    const user = await getUserById(decoded.id, `
+      id, uuid, name, email, user_type, status, 
+      email_verified_at, phone_verified_at, 
+      is_buyer, is_seller, token_version
+    `);
+    
+    if (!user) {
       throw new AuthenticationError('User not found or inactive');
     }
     
-    const user = users[0];
-    
-    // Check token version for security (optional - if implemented)
-    if (user.token_version && decoded.token_version !== user.token_version) {
-      throw new AuthenticationError('Token revoked');
+    // Check token version for security (token revocation)
+    if (user.token_version && decoded.token_version !== user.token_version - 1) {
+      throw new AuthenticationError('Token revoked - please login again');
     }
     
-    // Generate new token pair
+    // Generate new token pair with updated token version
     return generateTokenPair(user);
     
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      throw error;
+    }
     throw new AuthenticationError(`Token refresh failed: ${error.message}`);
   }
 };
+
+// ================================================================
+// RATE LIMITING CONFIGURATION
+// ================================================================
+
+const RATE_LIMIT_CONFIG = {
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW) || CONSTANTS.RATE_LIMIT.WINDOW_MS,
+  max: parseInt(process.env.RATE_LIMIT_MAX) || CONSTANTS.RATE_LIMIT.MAX_REQUESTS,
+  message: {
+    error: 'Too many requests',
+    message: 'Rate limit exceeded. Please try again later.',
+    retryAfter: Math.ceil((parseInt(process.env.RATE_LIMIT_WINDOW) || CONSTANTS.RATE_LIMIT.WINDOW_MS) / 1000)
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => getUserIdentifier(req),
+  handler: (req, res) => {
+    res.status(429).json(RATE_LIMIT_CONFIG.message);
+  }
+};
+
+// ================================================================
+// RATE LIMITING MIDDLEWARE
+// ================================================================
+
+/**
+ * General rate limiting middleware
+ */
+const rateLimiter = rateLimit(RATE_LIMIT_CONFIG);
+
+/**
+ * Strict rate limiting for authentication endpoints
+ */
+const authRateLimiter = rateLimit({
+  ...RATE_LIMIT_CONFIG,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: CONSTANTS.RATE_LIMIT.AUTH_MAX,
+  message: {
+    error: 'Too many authentication attempts',
+    message: 'Too many login attempts. Please try again in 15 minutes.',
+    retryAfter: 900
+  }
+});
+
+/**
+ * Password reset rate limiting
+ */
+const passwordResetRateLimiter = rateLimit({
+  ...RATE_LIMIT_CONFIG,
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: CONSTANTS.RATE_LIMIT.PASSWORD_RESET_MAX,
+  message: {
+    error: 'Too many password reset attempts',
+    message: 'Too many password reset requests. Please try again in 1 hour.',
+    retryAfter: 3600
+  }
+});
+
+/**
+ * Email verification rate limiting
+ */
+const emailVerificationRateLimiter = rateLimit({
+  ...RATE_LIMIT_CONFIG,
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: CONSTANTS.RATE_LIMIT.VERIFICATION_MAX,
+  message: {
+    error: 'Too many verification requests',
+    message: 'Too many verification emails sent. Please wait 5 minutes.',
+    retryAfter: 300
+  }
+});
 
 // ================================================================
 // MAIN AUTHENTICATION MIDDLEWARE
 // ================================================================
 
 /**
- * Main authentication middleware
+ * Main authentication middleware with enhanced security
  * Extracts and verifies JWT token from request headers
  */
 const authenticateToken = async (req, res, next) => {
@@ -292,21 +460,17 @@ const authenticateToken = async (req, res, next) => {
     const decoded = verifyAccessToken(token);
     
     // Get fresh user data from database
-    const [users] = await executeQuery(`
-      SELECT id, uuid, name, email, phone, user_type, status, 
-             email_verified_at, phone_verified_at, last_login_at, 
-             is_buyer, is_seller, preferred_agent_id,
-             login_attempts, locked_until, profile_image,
-             license_number, agency_name, agent_rating
-      FROM users 
-      WHERE id = ? AND status IN ('active', 'pending_verification')
-    `, [decoded.id]);
+    const user = await getUserById(decoded.id, `
+      id, uuid, name, email, phone, user_type, status, 
+      email_verified_at, phone_verified_at, last_login_at, 
+      is_buyer, is_seller, preferred_agent_id,
+      login_attempts, locked_until, profile_image,
+      license_number, agency_name, agent_rating, token_version
+    `);
     
-    if (users.length === 0) {
+    if (!user) {
       throw new AuthenticationError('User not found or inactive');
     }
-    
-    const user = users[0];
     
     // Check if user account is suspended
     if (user.status === 'suspended') {
@@ -316,6 +480,11 @@ const authenticateToken = async (req, res, next) => {
     // Check if account is locked
     if (user.locked_until && new Date(user.locked_until) > new Date()) {
       throw new AuthenticationError('Account locked due to failed login attempts');
+    }
+    
+    // Check token version for revocation (if implemented)
+    if (user.token_version && decoded.token_version && decoded.token_version < user.token_version) {
+      throw new AuthenticationError('Token revoked - please login again');
     }
     
     // Add user data to request object
@@ -365,16 +534,13 @@ const optionalAuth = async (req, res, next) => {
     try {
       const decoded = verifyAccessToken(token);
       
-      const [users] = await executeQuery(`
-        SELECT id, uuid, name, email, user_type, status, 
-               email_verified_at, phone_verified_at, 
-               is_buyer, is_seller, profile_image
-        FROM users 
-        WHERE id = ? AND status IN ('active', 'pending_verification')
-      `, [decoded.id]);
+      const user = await getUserById(decoded.id, `
+        id, uuid, name, email, user_type, status, 
+        email_verified_at, phone_verified_at, 
+        is_buyer, is_seller, profile_image
+      `);
       
-      if (users.length > 0) {
-        const user = users[0];
+      if (user) {
         req.user = {
           id: user.id,
           uuid: user.uuid,
@@ -678,6 +844,60 @@ const getUserIdentifier = (req) => {
 };
 
 // ================================================================
+// MIDDLEWARE COMPOSITION HELPERS
+// ================================================================
+
+/**
+ * Compose multiple middleware functions
+ * @param {...Function} middlewares - Middleware functions
+ * @returns {Function} Combined middleware function
+ */
+const composeMiddleware = (...middlewares) => {
+  return (req, res, next) => {
+    let index = 0;
+    
+    const runMiddleware = (middlewareIndex) => {
+      if (middlewareIndex >= middlewares.length) {
+        return next();
+      }
+      
+      const middleware = middlewares[middlewareIndex];
+      middleware(req, res, (err) => {
+        if (err) {
+          return next(err);
+        }
+        runMiddleware(middlewareIndex + 1);
+      });
+    };
+    
+    runMiddleware(0);
+  };
+};
+
+/**
+ * Common middleware combinations
+ */
+const authMiddleware = {
+  // Basic authentication
+  basic: authenticateToken,
+  
+  // Authentication with email verification
+  verified: composeMiddleware(authenticateToken, requireEmailVerified),
+  
+  // Full verification (email + phone)
+  fullyVerified: composeMiddleware(authenticateToken, requireFullyVerified),
+  
+  // Active account with full verification
+  activeAndVerified: composeMiddleware(authenticateToken, requireActiveAccount, requireFullyVerified),
+  
+  // Agent with assignment check
+  agentWithAssignment: composeMiddleware(authenticateToken, requireAgent, requireAgentAssignment),
+  
+  // Admin only
+  adminOnly: composeMiddleware(authenticateToken, requireAdmin)
+};
+
+// ================================================================
 // EXPORTS
 // ================================================================
 
@@ -726,62 +946,22 @@ module.exports = {
   generateVerificationToken,
   generateVerificationCode,
   
-  // Rate limiting helpers
+  // Rate limiting
+  rateLimiter,
+  authRateLimiter,
+  passwordResetRateLimiter,
+  emailVerificationRateLimiter,
   getUserIdentifier,
   
+  // Middleware composition
+  composeMiddleware,
+  authMiddleware,
+  
+  // Database utilities
+  getUserById,
+  incrementTokenVersion,
+  
   // Configuration
-  JWT_CONFIG
+  JWT_CONFIG,
+  CONSTANTS
 };
-
-// ================================================================
-// USAGE EXAMPLES
-// ================================================================
-
-/*
-// Basic authentication
-router.get('/profile', authenticateToken, (req, res) => {
-  res.json({ user: req.user });
-});
-
-// Role-based access
-router.get('/admin/users', authenticateToken, requireAdmin, (req, res) => {
-  // Only admins can access
-});
-
-// Property ownership check
-router.put('/properties/:id', 
-  authenticateToken, 
-  requirePropertyOwnership, 
-  (req, res) => {
-    // Only property owner or admin can update
-  }
-);
-
-// Agent assignment check
-router.get('/agent/clients/:userId', 
-  authenticateToken, 
-  requireAgentAssignment, 
-  (req, res) => {
-    // Only assigned agent or admin can access client data
-  }
-);
-
-// Multiple middleware
-router.post('/properties', 
-  authenticateToken, 
-  requireEmailVerified, 
-  requireActiveAccount, 
-  (req, res) => {
-    // Must be authenticated, email verified, and account active
-  }
-);
-
-// Optional authentication (for public endpoints with user-specific features)
-router.get('/properties', optionalAuth, (req, res) => {
-  if (req.user) {
-    // Show user-specific data like favorites
-  } else {
-    // Show general public data
-  }
-});
-*/
