@@ -26,57 +26,99 @@ const {
  */
 const getDashboardStats = async () => {
   try {
-    const [stats] = await executeQuery(`
-      SELECT 
-        -- User Statistics
-        (SELECT COUNT(*) FROM users WHERE user_type = 'user') as total_users,
-        (SELECT COUNT(*) FROM users WHERE user_type = 'agent') as total_agents,
-        (SELECT COUNT(*) FROM users WHERE user_type = 'admin') as total_admins,
-        (SELECT COUNT(*) FROM users WHERE status = 'active') as active_users,
-        (SELECT COUNT(*) FROM users WHERE status = 'pending_verification') as pending_verification_users,
-        
-        -- New Users This Month
-        (SELECT COUNT(*) FROM users WHERE user_type = 'user' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as new_users_this_month,
-        (SELECT COUNT(*) FROM users WHERE user_type = 'agent' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as new_agents_this_month,
-        
-        -- Verification Statistics
-        (SELECT COUNT(*) FROM users WHERE email_verified_at IS NOT NULL) as email_verified_users,
-        (SELECT COUNT(*) FROM users WHERE phone_verified_at IS NOT NULL) as phone_verified_users,
-        (SELECT COUNT(*) FROM users WHERE email_verified_at IS NOT NULL AND phone_verified_at IS NOT NULL) as fully_verified_users,
-        
-        -- Property Statistics
-        (SELECT COUNT(*) FROM property_listings) as total_properties,
-        (SELECT COUNT(*) FROM property_listings WHERE status = 'active') as active_properties,
-        (SELECT COUNT(*) FROM property_listings WHERE status = 'pending_review') as pending_properties,
-        (SELECT COUNT(*) FROM property_listings WHERE status = 'sold') as sold_properties,
-        (SELECT COUNT(*) FROM property_listings WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as new_properties_this_month,
-        
-        -- Enquiry Statistics
-        (SELECT COUNT(*) FROM enquiries) as total_enquiries,
-        (SELECT COUNT(*) FROM enquiries WHERE status IN ('new', 'assigned', 'in_progress')) as pending_enquiries,
-        (SELECT COUNT(*) FROM enquiries WHERE status = 'resolved') as resolved_enquiries,
-        (SELECT COUNT(*) FROM enquiries WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as new_enquiries_this_month,
-        
-        -- Approval Statistics
-        (SELECT COUNT(*) FROM pending_approvals WHERE status = 'pending') as total_pending_approvals,
-        (SELECT COUNT(*) FROM pending_approvals WHERE approval_type = 'property_listing' AND status = 'pending') as pending_property_approvals,
-        (SELECT COUNT(*) FROM pending_approvals WHERE approval_type = 'agent_application' AND status = 'pending') as pending_agent_approvals,
-        (SELECT COUNT(*) FROM pending_approvals WHERE approval_type = 'user_verification' AND status = 'pending') as pending_user_verifications,
-        
-        -- Agent Performance
-        (SELECT COUNT(*) FROM user_agent_assignments WHERE status = 'active') as active_agent_assignments,
-        (SELECT AVG(user_rating) FROM user_agent_assignments WHERE user_rating IS NOT NULL) as avg_agent_rating,
-        
-        -- Favorites and Views
-        (SELECT COUNT(*) FROM user_favorites) as total_favorites,
-        (SELECT COUNT(*) FROM property_views WHERE viewed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as property_views_this_month,
-        
-        -- Admin Created Agents
-        (SELECT COUNT(*) FROM admin_created_notifications) as admin_created_agents,
-        (SELECT COUNT(*) FROM admin_created_notifications WHERE email_sent = FALSE OR sms_sent = FALSE) as pending_agent_notifications
-    `);
+    // Execute all queries in parallel
+    const [
+      userStats,
+      propertyStats,
+      enquiryStats,
+      approvalStats,
+      agentStats,
+      favoriteStats,
+      adminAgentStats
+    ] = await Promise.all([
+      // User statistics
+      executeQuery(`
+        SELECT 
+          SUM(user_type = 'user') as total_users,
+          SUM(user_type = 'agent') as total_agents,
+          SUM(user_type = 'admin') as total_admins,
+          SUM(status = 'active') as active_users,
+          SUM(status = 'pending_verification') as pending_verification_users,
+          SUM(user_type = 'user' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as new_users_this_month,
+          SUM(user_type = 'agent' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as new_agents_this_month,
+          SUM(email_verified_at IS NOT NULL) as email_verified_users,
+          SUM(phone_verified_at IS NOT NULL) as phone_verified_users,
+          SUM(email_verified_at IS NOT NULL AND phone_verified_at IS NOT NULL) as fully_verified_users
+        FROM users
+      `),
+      
+      // Property statistics
+      executeQuery(`
+        SELECT 
+          COUNT(*) as total_properties,
+          SUM(status = 'active') as active_properties,
+          SUM(status = 'pending_review') as pending_properties,
+          SUM(status = 'sold') as sold_properties,
+          SUM(created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as new_properties_this_month
+        FROM property_listings
+      `),
+      
+      // Enquiry statistics
+      executeQuery(`
+        SELECT 
+          COUNT(*) as total_enquiries,
+          SUM(status IN ('new', 'assigned', 'in_progress')) as pending_enquiries,
+          SUM(status = 'resolved') as resolved_enquiries,
+          SUM(created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as new_enquiries_this_month
+        FROM enquiries
+      `),
+      
+      // Approval statistics
+      executeQuery(`
+        SELECT 
+          SUM(status = 'pending') as total_pending_approvals,
+          SUM(approval_type = 'property_listing' AND status = 'pending') as pending_property_approvals,
+          SUM(approval_type = 'agent_application' AND status = 'pending') as pending_agent_approvals,
+          SUM(approval_type = 'user_verification' AND status = 'pending') as pending_user_verifications
+        FROM pending_approvals
+      `),
+      
+      // Agent performance
+      executeQuery(`
+        SELECT 
+          SUM(status = 'active') as active_agent_assignments,
+          AVG(user_rating) as avg_agent_rating
+        FROM user_agent_assignments
+        WHERE user_rating IS NOT NULL
+      `),
+      
+      // Favorites and views
+      executeQuery(`
+        SELECT 
+          COUNT(*) as total_favorites,
+          (SELECT COUNT(*) FROM property_views WHERE viewed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as property_views_this_month
+        FROM user_favorites
+      `),
+      
+      // Admin created agents
+      executeQuery(`
+        SELECT 
+          COUNT(*) as admin_created_agents,
+          SUM(email_sent = FALSE OR sms_sent = FALSE) as pending_agent_notifications
+        FROM admin_created_notifications
+      `)
+    ]);
 
-    const statistics = stats[0];
+    // Combine all results
+    const statistics = {
+      ...userStats[0],
+      ...propertyStats[0],
+      ...enquiryStats[0],
+      ...approvalStats[0],
+      ...agentStats[0],
+      ...favoriteStats[0],
+      ...adminAgentStats[0]
+    };
 
     // Calculate derived statistics
     const userVerificationRate = statistics.total_users > 0 
@@ -101,7 +143,10 @@ const getDashboardStats = async () => {
 
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);
-    throw handleDatabaseError(error);
+    throw new DatabaseError('Failed to fetch dashboard statistics', { 
+      originalError: error,
+      query: 'dashboard_stats'
+    });
   }
 };
 
